@@ -27,6 +27,7 @@ SLOWAPI_SRCS = src/slowapi/request.s \
                src/slowapi/router.s \
                src/slowapi/query.s \
                src/slowapi/json.s \
+               src/slowapi/string.s \
                src/slowapi/slowapi.s \
                src/app.s
 
@@ -55,6 +56,7 @@ TEST_SRCS = src/test/test_main.s \
             src/slowapi/router.s \
             src/slowapi/query.s \
             src/slowapi/json.s \
+            src/slowapi/string.s \
             src/slowapi/slowapi.s \
             src/app.s
 TEST_OBJS = $(TEST_SRCS:.s=.o)

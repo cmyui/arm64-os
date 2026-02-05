@@ -13,6 +13,18 @@
 .equ HOTEL_CITY_MAX,    31   // max city length
 
 //=============================================================================
+// JSON CONTEXT SIZE (from json.s)
+//=============================================================================
+.equ JSON_CTX_SIZE, 16
+
+//=============================================================================
+// Stack Frame Sizes (named constants for clarity)
+//=============================================================================
+.equ LIST_HOTELS_LOCAL,   JSON_CTX_SIZE + 1024
+.equ GET_HOTEL_LOCAL,     JSON_CTX_SIZE + 512
+.equ CREATE_HOTEL_LOCAL,  HOTEL_SIZE + JSON_CTX_SIZE + 512
+
+//=============================================================================
 // ROUTES
 //=============================================================================
 
@@ -27,47 +39,25 @@ handler_index:
 // GET /api/hotels - List all hotels
 ENDPOINT METHOD_GET, "/api/hotels"
 handler_list_hotels:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    sub sp, sp, #JSON_CTX_SIZE + 1024  // JSON context + buffer
+    FRAME_ENTER 0, LIST_HOTELS_LOCAL
 
-    // Initialize JSON builder
-    mov x0, sp
-    add x1, sp, #JSON_CTX_SIZE
-    mov x2, #1024
-    bl json_init
-
-    // Start array
-    mov x0, sp
-    bl json_start_arr
+    JSON_INIT sp, 1024
+    JSON_ARR_START sp
 
     // Iterate over all hotels
     ldr x0, =list_hotel_callback
     mov x1, sp               // pass JSON context as user data
     bl db_list
 
-    // End array
-    mov x0, sp
-    bl json_end_arr
+    JSON_ARR_END sp
+    JSON_RESPOND sp
 
-    // Get result
-    mov x0, sp
-    bl json_finish
-    // x0 = buffer, x1 = length
-
-    bl resp_json
-
-    add sp, sp, #JSON_CTX_SIZE + 1024
-    ldp x29, x30, [sp], #16
-    ret
+    FRAME_LEAVE 0, LIST_HOTELS_LOCAL
 
 // Callback for db_list: adds a hotel to JSON array
 // x0 = id, x1 = data ptr, x2 = data size, x3 = context (JSON ctx)
 list_hotel_callback:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    stp x19, x20, [sp, #-16]!
-    stp x21, x22, [sp, #-16]!
+    FRAME_ENTER 2
 
     mov w19, w0              // id
     mov x20, x1              // data ptr (hotel record)
@@ -79,34 +69,20 @@ list_hotel_callback:
     cmp w0, #1
     b.le .no_comma_needed
 
-    mov x0, x21
-    bl json_comma
+    JSON_COMMA x21
 
 .no_comma_needed:
-    // Start hotel object
-    mov x0, x21
-    bl json_start_obj
+    JSON_OBJ_START x21
 
     // Add "id": <id>
-    mov x0, x21
-    ldr x1, =key_id
-    mov x2, #2
-    bl json_add_key
-    mov x0, x21
-    mov w1, w19
-    bl json_add_int
+    JSON_KEY x21, key_id, 2
+    JSON_INT x21, w19
 
-    // Add comma
-    mov x0, x21
-    bl json_comma
+    JSON_COMMA x21
 
     // Add "name": "<name>"
-    mov x0, x21
-    ldr x1, =key_name
-    mov x2, #4
-    bl json_add_key
+    JSON_KEY x21, key_name, 4
 
-    // Get name length (strlen)
     add x22, x20, #HOTEL_NAME_OFF
     mov x0, x22
     bl strlen_simple
@@ -117,17 +93,11 @@ list_hotel_callback:
     mov x1, x22              // name pointer
     bl json_add_string
 
-    // Add comma
-    mov x0, x21
-    bl json_comma
+    JSON_COMMA x21
 
     // Add "city": "<city>"
-    mov x0, x21
-    ldr x1, =key_city
-    mov x2, #4
-    bl json_add_key
+    JSON_KEY x21, key_city, 4
 
-    // Get city length
     add x22, x20, #HOTEL_CITY_OFF
     mov x0, x22
     bl strlen_simple
@@ -138,25 +108,17 @@ list_hotel_callback:
     mov x1, x22
     bl json_add_string
 
-    // End hotel object
-    mov x0, x21
-    bl json_end_obj
+    JSON_OBJ_END x21
 
     // Return 0 to continue iteration
     mov x0, #0
 
-    ldp x21, x22, [sp], #16
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
+    FRAME_LEAVE 2
 
 // GET /api/hotels/{id} - Get single hotel
 ENDPOINT METHOD_GET, "/api/hotels/{id}"
 handler_get_hotel:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    stp x19, x20, [sp, #-16]!
-    sub sp, sp, #JSON_CTX_SIZE + 512
+    FRAME_ENTER 1, GET_HOTEL_LOCAL
 
     mov x19, x0              // request context
 
@@ -164,56 +126,38 @@ handler_get_hotel:
     ldr x0, [x19, #REQ_PATH_PARAM]
     ldr w1, [x19, #REQ_PATH_PARAM_LEN]
     bl parse_int
-    // x0 = parsed ID (or 0 if failed)
-
-    cbz x0, .get_hotel_404
+    cbz x0, .get_hotel_err
     mov w20, w0              // hotel ID
 
     // Get hotel from database
     mov w0, w20
     bl db_get
-    // x0 = data ptr, x1 = data size
-
-    cbz x0, .get_hotel_404
+    cbz x0, .get_hotel_err
     mov x19, x0              // hotel data
 
     // Build JSON response
-    mov x0, sp
-    add x1, sp, #JSON_CTX_SIZE
-    mov x2, #512
-    bl json_init
+    JSON_INIT sp, 512
 
     mov x0, sp
     mov x1, x19
     mov w2, w20
     bl build_hotel_json
 
-    mov x0, sp
-    bl json_finish
-    bl resp_json
+    JSON_RESPOND sp
+    b .get_hotel_exit
 
-    add sp, sp, #JSON_CTX_SIZE + 512
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
-
-.get_hotel_404:
+.get_hotel_err:
     mov w0, #STATUS_NOT_FOUND
     bl resp_error
-    add sp, sp, #JSON_CTX_SIZE + 512
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
+
+.get_hotel_exit:
+    FRAME_LEAVE 1, GET_HOTEL_LOCAL
 
 // POST /api/hotels - Create hotel
 // Body format: "name,city"
 ENDPOINT METHOD_POST, "/api/hotels"
 handler_create_hotel:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    stp x19, x20, [sp, #-16]!
-    stp x21, x22, [sp, #-16]!
-    sub sp, sp, #HOTEL_SIZE + JSON_CTX_SIZE + 512
+    FRAME_ENTER 2, CREATE_HOTEL_LOCAL
 
     mov x19, x0              // request context
 
@@ -221,18 +165,15 @@ handler_create_hotel:
     ldr x20, [x19, #REQ_BODY]
     ldr w21, [x19, #REQ_BODY_LEN]
 
-    cbz x20, .create_bad_request
-    cbz w21, .create_bad_request
+    cbz x20, .create_err_400
+    cbz w21, .create_err_400
 
-    // Parse "name,city" format
-    // Find comma
+    // Parse "name,city" format - find comma
     mov x0, x20
     mov w1, w21
     mov w2, #','
     bl find_char
-    // x0 = pointer to comma, or 0 if not found
-
-    cbz x0, .create_bad_request
+    cbz x0, .create_err_400
     mov x22, x0              // comma position
 
     // Build hotel record on stack
@@ -241,8 +182,8 @@ handler_create_hotel:
     // Copy name (from body start to comma)
     sub w1, w22, w20         // name length
     cmp w1, #HOTEL_NAME_MAX
-    b.gt .create_bad_request
-    cbz w1, .create_bad_request
+    b.gt .create_err_400
+    cbz w1, .create_err_400
 
     mov x2, x0               // dest
     mov x3, x20              // src (body start)
@@ -264,8 +205,8 @@ handler_create_hotel:
     add x4, x20, x21         // body end
     sub w1, w4, w3           // city length
     cmp w1, #HOTEL_CITY_MAX
-    b.gt .create_bad_request
-    cbz w1, .create_bad_request
+    b.gt .create_err_400
+    cbz w1, .create_err_400
 
 .copy_city:
     cbz w1, .city_copied
@@ -280,9 +221,7 @@ handler_create_hotel:
     add x0, sp, #JSON_CTX_SIZE + 512
     mov x1, #HOTEL_SIZE
     bl db_create
-    // x0 = new ID (or 0 on failure)
-
-    cbz x0, .create_server_error
+    cbz x0, .create_err_500
     mov w20, w0              // new hotel ID
 
     // Get the record back to build response
@@ -291,10 +230,7 @@ handler_create_hotel:
     mov x21, x0              // hotel data ptr
 
     // Build JSON response
-    mov x0, sp
-    add x1, sp, #JSON_CTX_SIZE
-    mov x2, #512
-    bl json_init
+    JSON_INIT sp, 512
 
     mov x0, sp
     mov x1, x21
@@ -310,37 +246,25 @@ handler_create_hotel:
     mov w0, #STATUS_CREATED
     mov w3, #CTYPE_JSON
     bl resp_status
+    b .create_exit
 
-    add sp, sp, #HOTEL_SIZE + JSON_CTX_SIZE + 512
-    ldp x21, x22, [sp], #16
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
-
-.create_bad_request:
+.create_err_400:
     mov w0, #STATUS_BAD_REQUEST
-    bl resp_error
-    add sp, sp, #HOTEL_SIZE + JSON_CTX_SIZE + 512
-    ldp x21, x22, [sp], #16
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
+    b .create_err
 
-.create_server_error:
+.create_err_500:
     mov w0, #STATUS_SERVER_ERROR
+
+.create_err:
     bl resp_error
-    add sp, sp, #HOTEL_SIZE + JSON_CTX_SIZE + 512
-    ldp x21, x22, [sp], #16
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
+
+.create_exit:
+    FRAME_LEAVE 2, CREATE_HOTEL_LOCAL
 
 // DELETE /api/hotels/{id} - Delete hotel
 ENDPOINT METHOD_DELETE, "/api/hotels/{id}"
 handler_delete_hotel:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    stp x19, x20, [sp, #-16]!
+    FRAME_ENTER 1
 
     mov x19, x0              // request context
 
@@ -348,31 +272,25 @@ handler_delete_hotel:
     ldr x0, [x19, #REQ_PATH_PARAM]
     ldr w1, [x19, #REQ_PATH_PARAM_LEN]
     bl parse_int
-
-    cbz x0, .delete_404
+    cbz x0, .delete_err
     mov w20, w0
 
     // Delete from database
     mov w0, w20
     bl db_delete
-    // x0 = 0 success, -1 failure
-
     cmp x0, #0
-    b.ne .delete_404
+    b.ne .delete_err
 
     // 204 No Content
     bl resp_no_content
+    b .delete_exit
 
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
-
-.delete_404:
+.delete_err:
     mov w0, #STATUS_NOT_FOUND
     bl resp_error
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
+
+.delete_exit:
+    FRAME_LEAVE 1
 
 //=============================================================================
 // HELPER FUNCTIONS
@@ -381,36 +299,22 @@ handler_delete_hotel:
 // build_hotel_json: Build JSON for a hotel
 // Input: x0 = JSON context, x1 = hotel data ptr, w2 = hotel ID
 build_hotel_json:
-    stp x29, x30, [sp, #-16]!
-    mov x29, sp
-    stp x19, x20, [sp, #-16]!
-    stp x21, x22, [sp, #-16]!
+    FRAME_ENTER 2
 
     mov x19, x0              // JSON context
     mov x20, x1              // hotel data
     mov w21, w2              // hotel ID
 
-    // Start object
-    mov x0, x19
-    bl json_start_obj
+    JSON_OBJ_START x19
 
     // "id": <id>
-    mov x0, x19
-    ldr x1, =key_id
-    mov x2, #2
-    bl json_add_key
-    mov x0, x19
-    mov w1, w21
-    bl json_add_int
+    JSON_KEY x19, key_id, 2
+    JSON_INT x19, w21
 
-    mov x0, x19
-    bl json_comma
+    JSON_COMMA x19
 
     // "name": "<name>"
-    mov x0, x19
-    ldr x1, =key_name
-    mov x2, #4
-    bl json_add_key
+    JSON_KEY x19, key_name, 4
 
     add x22, x20, #HOTEL_NAME_OFF
     mov x0, x22
@@ -421,14 +325,10 @@ build_hotel_json:
     mov x1, x22
     bl json_add_string
 
-    mov x0, x19
-    bl json_comma
+    JSON_COMMA x19
 
     // "city": "<city>"
-    mov x0, x19
-    ldr x1, =key_city
-    mov x2, #4
-    bl json_add_key
+    JSON_KEY x19, key_city, 4
 
     add x22, x20, #HOTEL_CITY_OFF
     mov x0, x22
@@ -439,91 +339,9 @@ build_hotel_json:
     mov x1, x22
     bl json_add_string
 
-    // End object
-    mov x0, x19
-    bl json_end_obj
+    JSON_OBJ_END x19
 
-    ldp x21, x22, [sp], #16
-    ldp x19, x20, [sp], #16
-    ldp x29, x30, [sp], #16
-    ret
-
-// parse_int: Parse decimal integer from string
-// Input: x0 = string pointer, w1 = length
-// Output: x0 = parsed value (0 on failure)
-parse_int:
-    cbz x0, .parse_fail
-    cbz w1, .parse_fail
-
-    mov x2, #0               // result
-    mov w3, #0               // index
-
-.parse_loop:
-    cmp w3, w1
-    b.ge .parse_done
-
-    ldrb w4, [x0, x3]
-
-    // Check if digit
-    cmp w4, #'0'
-    b.lt .parse_fail
-    cmp w4, #'9'
-    b.gt .parse_fail
-
-    // result = result * 10 + digit
-    mov x5, #10
-    mul x2, x2, x5
-    sub w4, w4, #'0'
-    add x2, x2, x4
-
-    add w3, w3, #1
-    b .parse_loop
-
-.parse_done:
-    mov x0, x2
-    ret
-
-.parse_fail:
-    mov x0, #0
-    ret
-
-// strlen_simple: Get string length
-// Input: x0 = null-terminated string
-// Output: x0 = length (not including null)
-strlen_simple:
-    mov x1, x0
-    mov x2, #0
-.strlen_loop:
-    ldrb w3, [x1], #1
-    cbz w3, .strlen_done
-    add x2, x2, #1
-    b .strlen_loop
-.strlen_done:
-    mov x0, x2
-    ret
-
-// find_char: Find character in string
-// Input: x0 = string, w1 = length, w2 = character to find
-// Output: x0 = pointer to character, or 0 if not found
-find_char:
-    cbz w1, .find_not_found
-.find_loop:
-    ldrb w3, [x0]
-    cmp w3, w2
-    b.eq .find_found
-    add x0, x0, #1
-    sub w1, w1, #1
-    cbnz w1, .find_loop
-.find_not_found:
-    mov x0, #0
-    ret
-.find_found:
-    ret
-
-//=============================================================================
-// JSON CONTEXT SIZE (from json.s)
-//=============================================================================
-.equ JSON_CTX_SIZE, 16
+    FRAME_LEAVE 2
 
 //=============================================================================
 // STATIC DATA

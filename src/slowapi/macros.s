@@ -99,3 +99,126 @@
     // Handler label follows in .text
 .Lhandler_\@:
 .endm
+
+//=============================================================================
+// Frame Macros - Manage function prologues/epilogues
+//
+// FRAME_ENTER: Set up stack frame with optional callee-saved registers
+// FRAME_LEAVE: Clean up stack frame and return
+//
+// Parameters:
+//   regs: Number of register pairs to save (0-3)
+//         0 = none, 1 = x19-x20, 2 = x19-x22, 3 = x19-x24
+//   local_size: Additional stack space for local variables (default 0)
+//
+// Example:
+//     handler_example:
+//         FRAME_ENTER 1, 64    // saves x29,x30,x19,x20 + 64 bytes local
+//         ...
+//         FRAME_LEAVE 1, 64
+//=============================================================================
+
+.macro FRAME_ENTER regs:req, local_size=0
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    .if \regs >= 1
+        stp x19, x20, [sp, #-16]!
+    .endif
+    .if \regs >= 2
+        stp x21, x22, [sp, #-16]!
+    .endif
+    .if \regs >= 3
+        stp x23, x24, [sp, #-16]!
+    .endif
+    .if \local_size > 0
+        sub sp, sp, #\local_size
+    .endif
+.endm
+
+.macro FRAME_LEAVE regs:req, local_size=0
+    .if \local_size > 0
+        add sp, sp, #\local_size
+    .endif
+    .if \regs >= 3
+        ldp x23, x24, [sp], #16
+    .endif
+    .if \regs >= 2
+        ldp x21, x22, [sp], #16
+    .endif
+    .if \regs >= 1
+        ldp x19, x20, [sp], #16
+    .endif
+    ldp x29, x30, [sp], #16
+    ret
+.endm
+
+//=============================================================================
+// JSON Builder Macros - Convenience wrappers for common JSON operations
+//
+// These macros reduce boilerplate when building JSON responses.
+// They assume JSON_CTX_SIZE is defined (typically 16 bytes).
+//=============================================================================
+
+// Initialize JSON context at base_reg with buffer of buf_size bytes
+// Buffer starts at base_reg + JSON_CTX_SIZE
+.macro JSON_INIT base_reg:req, buf_size:req
+    mov x0, \base_reg
+    add x1, \base_reg, #JSON_CTX_SIZE
+    mov x2, #\buf_size
+    bl json_init
+.endm
+
+// Add a key to JSON object
+// ctx: register holding JSON context pointer
+// label: symbol for the key string
+// len: length of the key string
+.macro JSON_KEY ctx:req, label:req, len:req
+    mov x0, \ctx
+    ldr x1, =\label
+    mov x2, #\len
+    bl json_add_key
+.endm
+
+// Add an integer value to JSON
+.macro JSON_INT ctx:req, val:req
+    mov x0, \ctx
+    mov w1, \val
+    bl json_add_int
+.endm
+
+// Add a comma separator
+.macro JSON_COMMA ctx:req
+    mov x0, \ctx
+    bl json_comma
+.endm
+
+// Finish JSON and send response (calls json_finish then resp_json)
+.macro JSON_RESPOND ctx:req
+    mov x0, \ctx
+    bl json_finish
+    bl resp_json
+.endm
+
+// Start JSON object
+.macro JSON_OBJ_START ctx:req
+    mov x0, \ctx
+    bl json_start_obj
+.endm
+
+// End JSON object
+.macro JSON_OBJ_END ctx:req
+    mov x0, \ctx
+    bl json_end_obj
+.endm
+
+// Start JSON array
+.macro JSON_ARR_START ctx:req
+    mov x0, \ctx
+    bl json_start_arr
+.endm
+
+// End JSON array
+.macro JSON_ARR_END ctx:req
+    mov x0, \ctx
+    bl json_end_arr
+.endm
