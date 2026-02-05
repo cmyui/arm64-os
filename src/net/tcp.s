@@ -1,3 +1,5 @@
+.include "src/config.s"
+
 .section .text
 .global tcp_handle
 .global tcp_send
@@ -56,7 +58,7 @@ tcp_handle:
     mov x21, x2             // source IP
     mov x22, x3             // IP header
 
-    // Debug: print TCP length
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     ldr x0, =msg_tcp_len
     bl uart_puts
@@ -65,6 +67,7 @@ tcp_handle:
     mov w0, #' '
     bl uart_putc
     ldp x19, x20, [sp], #16
+.endif
 
     // Check minimum length
     cmp x20, #TCP_HEADER_SIZE
@@ -76,7 +79,7 @@ tcp_handle:
     lsl w23, w23, #8
     orr w23, w23, w0
 
-    // Debug: print dest port we got
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     stp x23, x24, [sp, #-16]!
     ldr x0, =msg_dport
@@ -87,22 +90,13 @@ tcp_handle:
     bl uart_putc
     ldp x23, x24, [sp], #16
     ldp x19, x20, [sp], #16
-
-    // Debug: marker
-    mov w0, #'A'
-    bl uart_putc
+.endif
 
     // Check if it's for our listening port
     ldr x0, =tcp_listen_port
     ldrh w0, [x0]
 
-    // Debug: marker
-    stp x0, xzr, [sp, #-16]!
-    mov w0, #'B'
-    bl uart_putc
-    ldp x0, xzr, [sp], #16
-
-    // Debug: print our listen port
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     stp x23, x24, [sp, #-16]!
     mov w23, w0             // temp save
@@ -115,6 +109,7 @@ tcp_handle:
     mov w0, w23             // restore for comparison
     ldp x23, x24, [sp], #16
     ldp x19, x20, [sp], #16
+.endif
 
     cmp w23, w0
     b.ne .tcp_done          // Not for us
@@ -157,7 +152,7 @@ tcp_handle:
     ldr x0, =tcp_state
     ldrb w27, [x0]              // Use w27 to preserve across calls
 
-    // Debug: print state
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     ldr x0, =msg_state
     bl uart_puts
@@ -166,6 +161,7 @@ tcp_handle:
     mov w0, #' '
     bl uart_putc
     ldp x19, x20, [sp], #16
+.endif
 
     // State machine
     cmp w27, #STATE_LISTEN
@@ -180,7 +176,7 @@ tcp_handle:
     b .tcp_done
 
 .handle_listen:
-    // Debug: print flags
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     stp x25, x26, [sp, #-16]!
     ldr x0, =msg_flags
@@ -191,12 +187,13 @@ tcp_handle:
     bl uart_putc
     ldp x25, x26, [sp], #16
     ldp x19, x20, [sp], #16
+.endif
 
     // Expecting SYN
     tst w25, #FLAG_SYN
     b.eq .tcp_done
 
-    // Debug: got SYN
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     stp x21, x22, [sp, #-16]!
     stp x23, x24, [sp, #-16]!
@@ -207,6 +204,7 @@ tcp_handle:
     ldp x23, x24, [sp], #16
     ldp x21, x22, [sp], #16
     ldp x19, x20, [sp], #16
+.endif
 
     // Received SYN, save their sequence number + 1 (we need to ACK their SYN)
     ldr x0, =tcp_their_seq
@@ -228,7 +226,7 @@ tcp_handle:
     b .tcp_done
 
 .handle_syn_recv:
-    // Debug: print flags we received
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     stp x25, x26, [sp, #-16]!
     ldr x0, =msg_synrecv_flags
@@ -239,6 +237,7 @@ tcp_handle:
     bl uart_putc
     ldp x25, x26, [sp], #16
     ldp x19, x20, [sp], #16
+.endif
 
     // Expecting ACK of our SYN+ACK
     tst w25, #FLAG_ACK
@@ -249,11 +248,12 @@ tcp_handle:
     mov w1, #STATE_ESTABLISHED
     strb w1, [x0]
 
-    // Debug: print that we got ACK, established
+.if DEBUG
     stp x19, x20, [sp, #-16]!
     ldr x0, =msg_established
     bl uart_puts
     ldp x19, x20, [sp], #16
+.endif
 
     // Check if this packet also has data (common with HTTP)
     ldrb w0, [x19, #TCP_DATA_OFF]
@@ -376,7 +376,7 @@ tcp_send_control:
 
     mov w19, w0             // flags
 
-    // Debug: print flags we're sending
+.if DEBUG
     stp x19, xzr, [sp, #-16]!
     ldr x0, =msg_send_flags
     bl uart_puts
@@ -385,6 +385,7 @@ tcp_send_control:
     mov w0, #' '
     bl uart_putc
     ldp x19, xzr, [sp], #16
+.endif
 
     // Build TCP segment in buffer
     ldr x20, =tcp_tx_buffer
@@ -482,7 +483,7 @@ tcp_send_control:
     strb w0, [x20, #TCP_CHECKSUM]
     strb w21, [x20, #TCP_CHECKSUM + 1]
 
-    // Debug: print remote IP value
+.if DEBUG
     ldr x4, =tcp_remote_ip
     stp x4, xzr, [sp, #-16]!
     ldr x0, =msg_rip
@@ -509,9 +510,9 @@ tcp_send_control:
     mov w0, #' '
     bl uart_putc
 
-    // Debug: about to call ip_send
     ldr x0, =msg_calling_ip_send
     bl uart_puts
+.endif
 
     // Load the remote IP value for sending
     ldr x0, =tcp_remote_ip
@@ -533,9 +534,10 @@ tcp_send_control:
     mov x3, #TCP_HEADER_SIZE
     bl ip_send
 
-    // Debug: ip_send returned
+.if DEBUG
     ldr x0, =msg_sent
     bl uart_puts
+.endif
 
     ldp x21, x22, [sp], #16
     ldp x19, x20, [sp], #16
@@ -759,6 +761,7 @@ tcp_buffer_reset:
     str wzr, [x0]
     ret
 
+.if DEBUG
 .section .rodata
 msg_tcp_syn:
     .asciz "TCP SYN "
@@ -786,6 +789,7 @@ msg_data_len:
     .asciz "data="
 msg_synrecv_flags:
     .asciz "SR_fl="
+.endif
 
 .section .data
 // Listening port (80)
