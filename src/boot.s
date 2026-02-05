@@ -34,6 +34,9 @@ _start:
     mov w1, #STATE_LISTEN
     strb w1, [x0]
 
+    // Initialize SlowAPI framework
+    bl slowapi_init
+
     // Print ready message
     ldr x0, =ready_msg
     bl uart_puts

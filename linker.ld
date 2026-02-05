@@ -12,6 +12,14 @@ SECTIONS
         *(.text*)
     } > RAM
 
+    /* SlowAPI route table - must come BEFORE .rodata to not be captured */
+    .rodata.routes : {
+        . = ALIGN(8);
+        __routes_start = .;
+        KEEP(*(.rodata.routes))
+        __routes_end = .;
+    } > RAM
+
     .rodata : {
         *(.rodata*)
     } > RAM

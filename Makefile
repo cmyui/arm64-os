@@ -17,8 +17,15 @@ COMMON_SRCS = src/drivers/uart.s \
               src/net/tcp.s \
               src/net/http.s
 
+# SlowAPI framework sources
+SLOWAPI_SRCS = src/slowapi/request.s \
+               src/slowapi/response.s \
+               src/slowapi/router.s \
+               src/slowapi/slowapi.s \
+               src/app.s
+
 # Server sources
-SERVER_SRCS = src/boot.s $(COMMON_SRCS)
+SERVER_SRCS = src/boot.s $(COMMON_SRCS) $(SLOWAPI_SRCS)
 SERVER_OBJS = $(SERVER_SRCS:.s=.o)
 
 # Test sources
@@ -61,10 +68,10 @@ run: $(KERNEL_ELF)
 		-machine virt \
 		-cpu cortex-a72 \
 		-nographic \
-		-global virtio-mmio.force-legacy=false \
+		-global virtio-mmio.force-legacy=true \
 		-kernel $(KERNEL_ELF) \
 		-device virtio-net-device,netdev=net0 \
-		-netdev user,id=net0,hostfwd=tcp::8080-:80
+		-netdev user,id=net0,hostfwd=tcp::8888-:80
 
 test: $(TEST_ELF)
 	qemu-system-aarch64 \

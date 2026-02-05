@@ -213,6 +213,9 @@ tcp_handle:
     add w26, w26, #1        // Their seq + 1 (ACK their SYN)
     str w26, [x0]           // Store the incremented value
 
+    // Reset rx buffer for new connection
+    bl tcp_buffer_reset
+
     // Send SYN+ACK
     mov w0, #(FLAG_SYN | FLAG_ACK)
     bl tcp_send_control
@@ -259,40 +262,32 @@ tcp_handle:
     sub w1, w20, w0         // Payload length
     cbz w1, .tcp_done       // No data - just ACK
 
-    // There's data! Process it now
-    add x0, x19, x0, UXTW   // x0 = data pointer
+    // There's data! Accumulate it
+    add x0, x19, x0, UXTW   // x0 = data pointer, w1 = data length
 
-    // Debug: print data length
-    stp x0, x1, [sp, #-16]!
-    ldr x0, =msg_data_len
-    bl uart_puts
-    ldp x0, x1, [sp], #16
-    stp x0, x1, [sp, #-16]!
-    mov x0, x1
-    bl uart_print_hex16
-    bl uart_newline
-    ldp x0, x1, [sp], #16
-
-    // Save payload info
-    ldr x2, =tcp_rx_data
-    str x0, [x2]
-    ldr x2, =tcp_rx_len
-    str w1, [x2]
+    // Append to rx buffer
+    bl tcp_buffer_append
 
     // Update their sequence number
     ldr x2, =tcp_their_seq
     ldr w3, [x2]
-    add w3, w3, w1
+    add w3, w3, w0          // w0 = bytes appended
     str w3, [x2]
 
     // Send ACK for the data
-    stp x0, x1, [sp, #-16]!
     mov w0, #FLAG_ACK
     bl tcp_send_control
-    ldp x0, x1, [sp], #16
 
-    // Call HTTP handler
-    bl http_handle
+    // Call application layer with buffered data
+    // Application returns: 0 = need more data, 1 = request complete
+    ldr x0, =tcp_rx_buffer
+    ldr x1, =tcp_rx_buffer_len
+    ldr w1, [x1]
+    bl tcp_app_handler
+    cbz w0, .tcp_done       // App needs more data
+
+    // App processed request, reset buffer
+    bl tcp_buffer_reset
 
     b .tcp_done
 
@@ -309,30 +304,30 @@ tcp_handle:
     cbz w1, .tcp_done       // No data
 
     // Calculate data pointer
-    add x0, x19, x0         // x0 = data pointer
+    add x0, x19, x0         // x0 = data pointer, w1 = length
 
-    // Save payload info for HTTP handler
-    ldr x2, =tcp_rx_data
-    str x0, [x2]
-    ldr x2, =tcp_rx_len
-    str w1, [x2]
+    // Append to rx buffer
+    bl tcp_buffer_append
 
     // Update their sequence number
     ldr x2, =tcp_their_seq
     ldr w3, [x2]
-    add w3, w3, w1          // Add data length
+    add w3, w3, w0          // w0 = bytes appended
     str w3, [x2]
 
     // Send ACK
     mov w0, #FLAG_ACK
     bl tcp_send_control
 
-    // Call HTTP handler
-    ldr x0, =tcp_rx_data
-    ldr x0, [x0]
-    ldr x1, =tcp_rx_len
+    // Call application layer with buffered data
+    ldr x0, =tcp_rx_buffer
+    ldr x1, =tcp_rx_buffer_len
     ldr w1, [x1]
-    bl http_handle
+    bl tcp_app_handler
+    cbz w0, .tcp_done       // App needs more data
+
+    // App processed request, reset buffer
+    bl tcp_buffer_reset
 
     b .tcp_done
 
@@ -356,6 +351,9 @@ tcp_handle:
     ldr x0, =tcp_our_seq
     mov w1, #1000
     str w1, [x0]
+
+    // Reset rx buffer for next connection
+    bl tcp_buffer_reset
 
     b .tcp_done
 
@@ -712,6 +710,55 @@ tcp_memcpy:
 .tcp_memcpy_done:
     ret
 
+// tcp_buffer_append: Append data to rx buffer
+// Input: x0 = src data, w1 = length
+// Output: w0 = bytes actually appended
+tcp_buffer_append:
+    stp x29, x30, [sp, #-16]!
+    mov x29, sp
+    stp x19, x20, [sp, #-16]!
+    stp x21, x22, [sp, #-16]!
+
+    mov x19, x0             // src
+    mov w20, w1             // length to append
+
+    // Get current buffer position
+    ldr x21, =tcp_rx_buffer_len
+    ldr w22, [x21]          // current length
+
+    // Check if we have space (8192 - current >= new)
+    mov w0, #8192
+    sub w0, w0, w22
+    cmp w20, w0
+    csel w20, w20, w0, le   // Clamp to available space
+
+    // Calculate dest = buffer + current_len
+    ldr x0, =tcp_rx_buffer
+    add x0, x0, x22, UXTW
+
+    // Copy data
+    mov x1, x19
+    mov x2, x20
+    bl tcp_memcpy
+
+    // Update buffer length
+    add w22, w22, w20
+    str w22, [x21]
+
+    // Return bytes appended
+    mov w0, w20
+
+    ldp x21, x22, [sp], #16
+    ldp x19, x20, [sp], #16
+    ldp x29, x30, [sp], #16
+    ret
+
+// tcp_buffer_reset: Clear the rx buffer for next request
+tcp_buffer_reset:
+    ldr x0, =tcp_rx_buffer_len
+    str wzr, [x0]
+    ret
+
 .section .rodata
 msg_tcp_syn:
     .asciz "TCP SYN "
@@ -767,12 +814,19 @@ tcp_remote_port:
 tcp_their_seq:
     .skip 4
 
-// RX data info
+// RX data info (legacy pointers - kept for compatibility)
 .balign 8
 tcp_rx_data:
     .skip 8
 tcp_rx_len:
     .skip 4
+
+// RX accumulation buffer for multi-segment HTTP requests
+.balign 8
+tcp_rx_buffer:
+    .skip 8192              // 8KB buffer for incoming data
+tcp_rx_buffer_len:
+    .skip 4                 // Current amount of data in buffer
 
 // TX buffer
 .balign 8
