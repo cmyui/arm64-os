@@ -7,10 +7,12 @@ OBJCOPY = aarch64-none-elf-objcopy
 KERNEL_ELF = kernel.elf
 KERNEL_BIN = kernel.bin
 TEST_ELF = kernel_test.elf
+BENCH_ELF = kernel_bench.elf
 
 # Common source files (shared between server and tests)
 COMMON_SRCS = src/drivers/uart.s \
               src/drivers/virtio.s \
+              src/drivers/timer.s \
               src/net/ethernet.s \
               src/net/arp.s \
               src/net/ipv4.s \
@@ -61,11 +63,24 @@ TEST_SRCS = src/test/test_main.s \
             src/app.s
 TEST_OBJS = $(TEST_SRCS:.s=.o)
 
+# Benchmark sources
+BENCH_SRCS = src/bench/bench_main.s \
+             src/bench/bench_harness.s \
+             src/bench/bench_slab.s \
+             src/bench/bench_db.s \
+             src/bench/bench_string.s \
+             src/bench/bench_json.s \
+             src/bench/bench_request.s \
+             $(COMMON_SRCS) \
+             $(MEM_DB_SRCS) \
+             $(SLOWAPI_SRCS)
+BENCH_OBJS = $(BENCH_SRCS:.s=.o)
+
 # Flags
 ASFLAGS = -g
 LDFLAGS = -T linker.ld -nostdlib
 
-.PHONY: all clean run test
+.PHONY: all clean run test bench
 
 all: $(KERNEL_ELF)
 
@@ -75,6 +90,9 @@ $(KERNEL_ELF): $(SERVER_OBJS) linker.ld
 $(TEST_ELF): $(TEST_OBJS) linker.ld
 	$(LD) $(LDFLAGS) -o $@ $(TEST_OBJS)
 
+$(BENCH_ELF): $(BENCH_OBJS) linker.ld
+	$(LD) $(LDFLAGS) -o $@ $(BENCH_OBJS)
+
 $(KERNEL_BIN): $(KERNEL_ELF)
 	$(OBJCOPY) -O binary $< $@
 
@@ -82,7 +100,7 @@ $(KERNEL_BIN): $(KERNEL_ELF)
 	$(AS) $(ASFLAGS) -o $@ $<
 
 clean:
-	rm -f $(SERVER_OBJS) $(TEST_OBJS) $(KERNEL_ELF) $(KERNEL_BIN) $(TEST_ELF)
+	rm -f $(SERVER_OBJS) $(TEST_OBJS) $(BENCH_OBJS) $(KERNEL_ELF) $(KERNEL_BIN) $(TEST_ELF) $(BENCH_ELF)
 
 run: $(KERNEL_ELF)
 	qemu-system-aarch64 \
@@ -101,5 +119,15 @@ test: $(TEST_ELF)
 		-nographic \
 		-global virtio-mmio.force-legacy=true \
 		-kernel $(TEST_ELF) \
+		-device virtio-net-device,netdev=net0 \
+		-netdev user,id=net0
+
+bench: $(BENCH_ELF)
+	qemu-system-aarch64 \
+		-machine virt \
+		-cpu cortex-a72 \
+		-nographic \
+		-global virtio-mmio.force-legacy=true \
+		-kernel $(BENCH_ELF) \
 		-device virtio-net-device,netdev=net0 \
 		-netdev user,id=net0
